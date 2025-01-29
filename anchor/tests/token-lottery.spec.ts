@@ -2,6 +2,7 @@ import * as anchor from '@coral-xyz/anchor';
 import { Program } from '@coral-xyz/anchor';
 import { TokenLottery } from '../target/types/token_lottery';
 import { BN } from 'bn.js';
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 describe('token-lottery', () => {
   // Configure the client to use the local cluster.
@@ -11,7 +12,7 @@ describe('token-lottery', () => {
 
   const program = anchor.workspace.TokenLottery as Program<TokenLottery>;
 
-  it('should init config', async () => {
+  it('should init', async () => {
     // Add your test here.
     const instruction = await program.methods.initializeConfig(
       new BN(0),
@@ -28,9 +29,30 @@ describe('token-lottery', () => {
         lastValidBlockHeight : blockhashWithContext.lastValidBlockHeight
       }
     ).add(instruction);
-    console.log('Your transaction signature', tx);
+    // console.log('Your init config signature', tx);
 
-    const signature = await anchor.web3.sendAndConfirmTransaction(provider.connection,tx,[wallet.payer])
-    console.log("Your transaction signature",signature);
+    const signature = await anchor.web3.sendAndConfirmTransaction(provider.connection,tx,[wallet.payer],{skipPreflight:true})
+    console.log("Your init config signature",signature);
+
+    const initLotteryIx = await program.methods.initializeLottery().accounts({
+      tokenProgram: TOKEN_PROGRAM_ID
+    }).instruction();
+
+    const initLotteryTx = new anchor.web3.Transaction(
+      {
+        feePayer:wallet.publicKey,
+        blockhash:blockhashWithContext.blockhash,
+        lastValidBlockHeight : blockhashWithContext.lastValidBlockHeight
+      }
+    ).add(initLotteryIx);
+
+    const initLotterySignature = await anchor.web3.sendAndConfirmTransaction(
+      provider.connection,
+      initLotteryTx,
+      [wallet.payer],
+      {skipPreflight:true}
+    );
+
+    console.log("You Init Lottery Signature",initLotterySignature);
   });
 });
