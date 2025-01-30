@@ -1,8 +1,11 @@
 import * as anchor from '@coral-xyz/anchor';
 import { Program } from '@coral-xyz/anchor';
-import { TokenLottery } from '../target/types/token_lottery';
-import { BN } from 'bn.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import * as sb from "@switchboard-xyz/on-demand";
+import { BN } from 'bn.js';
+import { TokenLottery } from '../target/types/token_lottery';
+import { before } from 'node:test';
+import SwicthboardIDL from './on-demand-idl.json'
 
 describe('token-lottery', () => {
   // Configure the client to use the local cluster.
@@ -11,6 +14,52 @@ describe('token-lottery', () => {
   const wallet = provider.wallet as anchor.Wallet
 
   const program = anchor.workspace.TokenLottery as Program<TokenLottery>;
+
+  let switchboardProgram = new anchor.Program(SwicthboardIDL as anchor.Idl,provider);
+  const rngKp = anchor.web3.Keypair.generate();
+
+  /* before(async () => {
+    anchor.Program.fetchIdl(
+      sb.sb
+    )
+  }); */
+
+  async function buyTicket() {
+    const buyTicketIx = await program.methods.buyTicket().accounts({
+      tokenProgram:TOKEN_PROGRAM_ID
+    }).instruction();
+
+    const computeIx = anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+      units:300000
+    });
+
+    const priorityIx = anchor.web3.ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports:1
+    });
+
+
+    const blockhashWithContext = await provider.connection.getLatestBlockhash();
+
+    const tx = new anchor.web3.Transaction(
+      {
+        feePayer:provider.wallet.publicKey,
+        blockhash:blockhashWithContext.blockhash,
+        lastValidBlockHeight:blockhashWithContext.lastValidBlockHeight
+      }
+    )
+    .add(buyTicketIx)
+    .add(computeIx)
+    .add(priorityIx);
+
+    const signature = await anchor.web3.sendAndConfirmTransaction(
+      provider.connection,
+      tx,
+      [wallet.payer],
+      {skipPreflight:true}
+    );
+
+    console.log("Buy Ticket signature",signature);
+  }
 
   it('should init', async () => {
     // Add your test here.
@@ -54,5 +103,14 @@ describe('token-lottery', () => {
     );
 
     console.log("You Init Lottery Signature",initLotterySignature);
+
+    await buyTicket();
+    await buyTicket();
+    await buyTicket();
+    await buyTicket();
+    await buyTicket();
+    await buyTicket();
+
+
   });
 });
