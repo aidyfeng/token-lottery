@@ -5,11 +5,12 @@ use anchor_spl::{
     metadata::{
         self, create_master_edition_v3, create_metadata_accounts_v3,
         mpl_token_metadata::types::{CollectionDetails, Creator, DataV2},
-        sign_metadata, CreateMasterEditionV3, CreateMetadataAccountsV3, Metadata, SignMetadata,
-        SetAndVerifySizedCollectionItem
+        sign_metadata, CreateMasterEditionV3, CreateMetadataAccountsV3, Metadata,
+        SetAndVerifySizedCollectionItem, SignMetadata,
     },
     token_interface::{self, Mint, TokenAccount, TokenInterface},
 };
+use switchboard_on_demand::RandomnessAccountData;
 
 declare_id!("4VzbJ355cmZprUPYgQ2BbPzL9RrFqRUqZjsYXqQ414jK");
 
@@ -23,9 +24,8 @@ pub const SYMBOL: &str = "TICKET";
 
 #[program]
 pub mod token_lottery {
-    use switchboard_on_demand::{randomness, RandomnessAccountData};
 
-    use crate::ErrorCode;
+    use anchor_spl::token;
 
     use super::*;
 
@@ -253,24 +253,42 @@ pub mod token_lottery {
     }
 
     pub fn commit_randomness(ctx: Context<CommitRandomness>) -> Result<()> {
-        let clock = Clock::get()? ;
+        let clock = Clock::get()?;
         let token_lottery = &mut ctx.accounts.token_lottery;
 
-        if ctx.accounts.payer.key() != token_lottery.authority  {
-            return Err(ErrorCode::NotAuthorized.into())
+        if ctx.accounts.payer.key() != token_lottery.authority {
+            return Err(ErrorCode::NotAuthorized.into());
         }
 
-        let randomness_data = RandomnessAccountData::parse(
-            ctx.accounts.randomness_account.data.borrow()
-        ).unwrap();
+        let randomness_data =
+            RandomnessAccountData::parse(ctx.accounts.randomness_account.data.borrow()).unwrap();
 
-        if randomness_data.seed_slot != clock.slot -1 {
+        if randomness_data.seed_slot != clock.slot - 1 {
             return Err(ErrorCode::RandomnessAlreadyRevealed.into());
         }
 
         token_lottery.randomness_account = ctx.accounts.randomness_account.key();
 
-        
+        Ok(())
+    }
+
+    pub fn reveal_winner(ctx: Context<RevealWinner>) -> Result<()> {
+        let clock = Clock::get()?;
+        let token_lottery = &mut ctx.accounts.token_lottery;
+
+        if ctx.accounts.payer.key() != token_lottery.authority {
+            return Err(ErrorCode::NotAuthorized.into());
+        }
+
+        if ctx.accounts.randomness_account.key() != token_lottery.randomness_account {
+            return Err(ErrorCode::IncorrectRandomnessAccount.into());
+        }
+
+        if clock.slot < token_lottery.end_time {
+            return Err(ErrorCode::LotteryNotComplete.into());
+        }
+
+        require!(!token_lottery.winner_chosen, ErrorCode::WinnerChosen);
 
         Ok(())
     }
@@ -456,9 +474,8 @@ pub struct BuyTicket<'info> {
 
 #[derive(Accounts)]
 pub struct CommitRandomness<'info> {
-
     #[account(mut)]
-    pub payer : Signer<'info>,
+    pub payer: Signer<'info>,
 
     #[account(
         mut,
@@ -468,7 +485,23 @@ pub struct CommitRandomness<'info> {
     pub token_lottery: Account<'info, TokenLottery>,
 
     ///CHECK:This account is checked by the Switchboard smart contract
-    pub randomness_account : UncheckedAccount<'info>
+    pub randomness_account: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RevealWinner<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"token_lottery".as_ref()],
+        bump = token_lottery.bump
+    )]
+    pub token_lottery: Account<'info, TokenLottery>,
+
+    ///CHECK:This account is checked by the Switchboard smart contract
+    pub randomness_account: UncheckedAccount<'info>,
 }
 
 #[account]
@@ -493,5 +526,11 @@ pub enum ErrorCode {
     #[msg("Not Authorized")]
     NotAuthorized,
     #[msg("Randomness Already Revealed")]
-    RandomnessAlreadyRevealed
+    RandomnessAlreadyRevealed,
+    #[msg("Incorrect Randomness Account")]
+    IncorrectRandomnessAccount,
+    #[msg("Lottery Not Complete")]
+    LotteryNotComplete,
+    #[msg("Winner Chosen")]
+    WinnerChosen,
 }
