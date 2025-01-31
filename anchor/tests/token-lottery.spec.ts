@@ -72,9 +72,13 @@ describe('token-lottery', () => {
 
   it('should init', async () => {
     // Add your test here.
+    const slot = await provider.connection.getSlot();
+    const endSlot = slot + 20;
+
+
     const instruction = await program.methods.initializeConfig(
-      new BN(0),
-      new BN(1838071024737),
+      new BN(slot),
+      new BN(endSlot),
       new BN(10_000)
     ).instruction();
 
@@ -196,5 +200,57 @@ describe('token-lottery', () => {
     );
 
     console.log("commit signature",commitSignature);
+
+
+    const sbRevealIx = await randomness.revealIx();
+
+    const revealIx = await program.methods.revealWinner().accounts({
+      randomnessAccount : randomness.pubkey
+    }).instruction();
+
+    const revealBlockhashWithContext = await provider.connection.getLatestBlockhash();
+
+    const revealTx = new anchor.web3.Transaction({
+      feePayer: provider.wallet.publicKey,
+      blockhash:revealBlockhashWithContext.blockhash,
+      lastValidBlockHeight:revealBlockhashWithContext.lastValidBlockHeight
+    })
+    .add(sbRevealIx)
+    .add(revealIx);
+
+    let currentSlot = 0;
+    while(currentSlot < endSlot){
+      const slot = await provider.connection.getSlot();
+      if(slot > currentSlot){
+        currentSlot = slot;
+        console.log("Current slot", currentSlot);
+      }
+    }
+
+    const revealSignature = await anchor.web3.sendAndConfirmTransaction(
+      provider.connection,revealTx,[wallet.payer]
+    );
+
+    console.log("reveal signature",revealSignature);
+
+    const claimIx = await program.methods.claimWinnings().accounts({
+      tokenProgram : TOKEN_PROGRAM_ID
+    }).instruction();
+
+    const claimBlockhashWithContext = await provider.connection.getLatestBlockhash();
+
+    const claimTx = new anchor.web3.Transaction({
+      feePayer: provider.wallet.publicKey,
+      blockhash:claimBlockhashWithContext.blockhash,
+      lastValidBlockHeight:claimBlockhashWithContext.lastValidBlockHeight
+    })
+    .add(claimIx);
+
+    const claimSignature = await anchor.web3.sendAndConfirmTransaction(
+      provider.connection,claimTx,[wallet.payer]
+    );
+
+    console.log("claim signature",claimSignature);
+
   },3000000);
 });

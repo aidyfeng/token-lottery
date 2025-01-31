@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
+use anchor_spl::metadata::MetadataAccount;
 use anchor_spl::{
     associated_token::AssociatedToken,
     metadata::{
@@ -24,8 +25,6 @@ pub const SYMBOL: &str = "TICKET";
 
 #[program]
 pub mod token_lottery {
-
-    use anchor_spl::token;
 
     use super::*;
 
@@ -161,6 +160,8 @@ pub mod token_lottery {
             ctx.accounts.token_lottery.ticket_price,
         )?;
 
+        ctx.accounts.token_lottery.lottery_pot_amount += ctx.accounts.token_lottery.ticket_price;
+
         let signer_seeds: &[&[&[u8]]] =
             &[&[b"collection_mint".as_ref(), &[ctx.bumps.collection_mint]]];
 
@@ -289,6 +290,56 @@ pub mod token_lottery {
         }
 
         require!(!token_lottery.winner_chosen, ErrorCode::WinnerChosen);
+
+        let randomness_data: std::cell::Ref<'_, RandomnessAccountData> =
+            RandomnessAccountData::parse(ctx.accounts.randomness_account.data.borrow()).unwrap();
+
+        let reveal_number_value = randomness_data
+            .get_value(&clock)
+            .map_err(|_| ErrorCode::RandomnessNotResolved)?;
+
+        let winner = reveal_number_value[0] as u64 % token_lottery.total_tickets;
+
+        msg!("Winner chosen {}", winner);
+        token_lottery.winner = winner;
+        token_lottery.winner_chosen = true;
+        Ok(())
+    }
+
+    pub fn claim_winnings(ctx: Context<ClaimWinnings>) -> Result<()> {
+        require!(
+            ctx.accounts.token_lottery.winner_chosen,
+            ErrorCode::WinnerNotChosen
+        );
+        require!(
+            ctx.accounts
+                .ticket_metadata
+                .collection
+                .as_ref()
+                .unwrap()
+                .verified,
+            ErrorCode::NotVerified
+        );
+        require!(
+            ctx.accounts
+                .ticket_metadata
+                .collection
+                .as_ref()
+                .unwrap()
+                .key
+                == ctx.accounts.collection_mint.key(),
+            ErrorCode::IncorrectTicket
+        );
+
+        let ticket_name = NAME.to_owned() + &ctx.accounts.token_lottery.winner.to_string();
+        let metadata_name = ctx.accounts.ticket_metadata.name.replace("\u{0}", "");
+
+        require!(ticket_name == metadata_name, ErrorCode::IncorrectTicket);
+        require!(ctx.accounts.ticket_account.amount > 0, ErrorCode::NoTicket);
+
+        **ctx.accounts.token_lottery.to_account_info().lamports.borrow_mut() -= ctx.accounts.token_lottery.lottery_pot_amount;
+        **ctx.accounts.payer.to_account_info().lamports.borrow_mut() += ctx.accounts.token_lottery.lottery_pot_amount;
+        ctx.accounts.token_lottery.lottery_pot_amount = 0;
 
         Ok(())
     }
@@ -504,6 +555,65 @@ pub struct RevealWinner<'info> {
     pub randomness_account: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
+pub struct ClaimWinnings<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"token_lottery".as_ref()],
+        bump = token_lottery.bump
+    )]
+    pub token_lottery: Account<'info, TokenLottery>,
+
+    #[account(
+        seeds = [token_lottery.winner.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub ticket_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        seeds = [b"collection_mint".as_ref()],
+        bump
+    )]
+    pub collection_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [
+            b"metadata",
+            token_metadata_program.key().as_ref(),
+            ticket_mint.key().as_ref()
+            ],
+        bump,
+        seeds::program = token_metadata_program.key()
+    )]
+    pub ticket_metadata: Account<'info, MetadataAccount>,
+
+    #[account(
+        associated_token::mint = ticket_mint,
+        associated_token::authority = payer,
+        associated_token::token_program = token_program
+    )]
+    pub ticket_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        seeds = [
+            b"metadata",
+            token_metadata_program.key().as_ref(),
+            collection_mint.key().as_ref()
+            ],
+        bump,
+        seeds::program = token_metadata_program.key()
+    )]
+    ///CHECK:This account is checked by the metadata smart contract
+    pub collection_metadata: Account<'info, MetadataAccount>,
+
+    pub token_metadata_program: Program<'info, Metadata>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct TokenLottery {
@@ -533,4 +643,14 @@ pub enum ErrorCode {
     LotteryNotComplete,
     #[msg("Winner Chosen")]
     WinnerChosen,
+    #[msg("Randomness not resolved")]
+    RandomnessNotResolved,
+    #[msg("Winner Not Chosen")]
+    WinnerNotChosen,
+    #[msg("Not Verified")]
+    NotVerified,
+    #[msg("Incorrect Ticket")]
+    IncorrectTicket,
+    #[msg("No Ticket")]
+    NoTicket,
 }
